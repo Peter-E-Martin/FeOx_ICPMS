@@ -164,8 +164,8 @@ samples.loc[:,'147R'] = make_ratio(samples, 'Sm147_ng', 'Sm147_ng_s',
 
 # Calculate number of mols
 mol147 = Sm_ICPMS_mols(Smatnorm, Sm_norm, samples['147R'], Sm_NbBlnk)
-samples.loc[:,'mol 147'] = [m.n for m in mol232]
-samples.loc[:,'mol 147 s'] = [m.s for m in mol232]
+samples.loc[:,'mol 147'] = [m.n for m in mol147]
+samples.loc[:,'mol 147 s'] = [m.s for m in mol147]
 
 
 # Calculate Fe std based concentrations
