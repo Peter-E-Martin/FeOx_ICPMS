@@ -36,7 +36,6 @@ def ICPMS_mols(atnorm, ratnorm, norm, spkblk, Nb_blk, R_meas):
     mols = (Atoms-Nbat_blk)/6.022e23
     return mols
 
-
 def Sm_ICPMS_mols(Smatnorm, NdSm, SmNdRat, Nb_Smblk):
     Nd145_shot = (1/NdSm)*Smatnorm*0.1502
     atoms147 = SmNdRat*Nd145_shot
@@ -45,8 +44,12 @@ def Sm_ICPMS_mols(Smatnorm, NdSm, SmNdRat, Nb_Smblk):
     return mols_147Sm
 
 # fn = r'C:\Users\pemar\Documents\FlowersResearch\Sparrow\Sparrow-CU-TRaIL\TRaIL-Data\icpmsData\Example_directory\FULL.xlsx'
-# fn = r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_17_ICPMS\full.xlsx'
-fn = r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_03_ICPMS\full.xlsx'
+fn = r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_17_ICPMS\full.xlsx'
+# fn = r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_03_ICPMS\full.xlsx'
+weight_file = r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_03_ICPMS\Weighing_2-22-22.xlsx'
+
+weights = pd.read_excel(weight_file)
+weights.rename(columns={'sample':'Sample Name'}, inplace=True)
 
 # import data
 data = pd.read_excel(fn,
@@ -56,6 +59,7 @@ data.iloc[0:2] = data.iloc[0:2].fillna(method='ffill', axis = 1)
 data.iloc[0:2] = data.iloc[0:2].fillna('')
 data.columns = data.iloc[0:2].apply(lambda x: '.'.join([y for y in x if y]), axis=0)
 data = data.iloc[2:]
+# data = data.iloc[17:]
 
 col_names = list(data.columns)
 subs = {'Sample.Sample Name': 'Sample Name',
@@ -73,6 +77,8 @@ to_replace = {k: v for k,v in zip(list(data.columns), col_names)}
 
 data = data.rename(columns=to_replace)
 
+data.loc[:,'Sample Number'] = data['Sample.Data File'].str.split('S').str[0].astype(int)
+
 # # separate blanks, normals, and samples
 Nb_blanks = data.loc[data['Sample Name'].str.contains('~B')]
 acid_blanks = data.loc[data['Sample Name'].str.contains('~A')]
@@ -89,13 +95,27 @@ samples = data.loc[~data['Sample Name'].str.contains('~B') &
                     ~data['Sample Name'].str.contains('Water')&
                     ~data['Sample Name'].str.contains('Wash')]
 
+fe_iso = '57Fe_ng'
+
+# Get washes as blanks
+washes = data.loc[data['Sample Name'].str.contains('Wash')]
+
+# Regress washes for running correction
+regress_wash = False
+if regress_wash:
+    wash_popt, _ = curve_fit(exponential, washes['Sample Number'], washes[fe_iso])
+    x = np.linspace(0,50,200)
+    y = exponential(x, *wash_popt)
+
 # Regress Fe stds
 iron_stds = data.loc[data['Sample Name'].str.contains('ppm')]
 
-fe_iso = '56Fe_ng'
-
 iron_stds.loc[:,'conc'] = iron_stds['Sample Name'].str.split('ppm').str[0].astype(int)
-popt, pcov = curve_fit(exponential, iron_stds['conc'], iron_stds[fe_iso], p0=[1e7, 0.01])
+if regress_wash:
+    iron_stds.loc[:,'Fe_corr'] = iron_stds[fe_iso]-wash_popt[0]*np.exp(iron_stds['Sample Number']*wash_popt[1])
+else:
+    iron_stds.loc[:,'Fe_corr'] = iron_stds[fe_iso]-np.average(washes[fe_iso])
+popt, pcov = curve_fit(exponential, iron_stds['conc'], iron_stds['Fe_corr'], p0=[1e7, 0.01])
 
 x = np.linspace(0,500,1000)
 y = exponential(x, *popt)
@@ -149,10 +169,29 @@ samples.loc[:,'mol 147 s'] = [m.s for m in mol232]
 
 
 # Calculate Fe std based concentrations
-samples.loc[:,'ppm Fe'] = np.log((samples[fe_iso]/popt[0]).astype(float))/popt[1]
-samples.loc[:,'g hematite'] = samples['ppm Fe']*(3/(0.7*1000000))
+if regress_wash:
+    samples.loc[:,'Fe_corr'] = samples[fe_iso]-wash_popt[0]*np.exp(samples['Sample Number']*wash_popt[1])
+else:
+    samples.loc[:,'Fe_corr'] = samples[fe_iso]-np.average(washes[fe_iso])
 
-relevant_cols = ['Sample Name', 'mol 238', 'mol 238 s', 'mol 232', 'mol 232 s', 'mol 147', 'mol 147 s']
+samples.loc[:,'ppm Fe'] = np.log((samples['Fe_corr']/popt[0]).astype(float))/popt[1]
+samples.loc[:,'ug hematite (Fe-norm)'] = samples['ppm Fe']*(3/(0.7))
+
+# add weighed mass
+samples = samples.merge(weights, how='left')
+
+samples.loc[:,'ppb U weighed'] = samples['mol 238']*238030000000/(samples['grain mass (ug)']/1e6)
+samples.loc[:,'ppb U Fe-normed'] = samples['mol 238']*238030000000/(samples['ug hematite (Fe-norm)']/1e6)
+
+samples.loc[:,'ppb Th weighed'] = samples['mol 232']*232040000000/(samples['grain mass (ug)']/1e6)
+samples.loc[:,'ppb Th Fe-normed'] = samples['mol 232']*232040000000/(samples['ug hematite (Fe-norm)']/1e6)
+
+samples.loc[:,'ppb Sm weighed'] = samples['mol 147']*147000000000/(samples['grain mass (ug)']/1e6)
+samples.loc[:,'ppb Sm Fe-normed'] = samples['mol 147']*147000000000/(samples['ug hematite (Fe-norm)']/1e6)
+
+relevant_cols = ['Sample Name', 'mol 238', 'mol 238 s', 'mol 232', 'mol 232 s', 'mol 147', 'mol 147 s',
+                 'ug hematite (Fe-norm)', 'grain mass (ug)', 'ppb U weighed', 'ppb U Fe-normed',
+                 'ppb Th weighed', 'ppb Th Fe-normed', 'ppb Sm weighed', 'ppb Sm Fe-normed']
 samples_trimmed = samples[relevant_cols]
 
-# samples_trimmed.to_excel(r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_17_ICPMS\init_results.xlsx')
+samples_trimmed.to_excel(r'C:\Users\pemar\Documents\FlowersResearch\Hematite_DoubleDating\Analyses\2022_03_17_ICPMS\Results.xlsx')
